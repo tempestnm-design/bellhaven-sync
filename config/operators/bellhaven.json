@@ -1,0 +1,20 @@
+{
+  "operator_key": "bellhaven",
+  "display_name": "Bellhaven Senior Living",
+  "website_base_url": "https://analyst-assessment-production.up.railway.app",
+  "directory_path": "/communities",
+  "crm_api_base_url": "https://analyst-assessment-production.up.railway.app/api/v1",
+  "token_environment_variable": "CLIPBOARD_CRM_TOKEN",
+  "parent_account_name": "Bellhaven Senior Living (Parent Account)",
+  "expected_parent_account_id": "0015QAPLGS3FVYEEEM",
+  "discovery": {
+    "minimum_facilities": 35,
+    "maximum_facilities": 35,
+    "required_directory_pages": 3
+  },
+  "care_type_map": {
+    "Assisted Living": "Assisted Living",
+    "Memory Support": "Memory Care",
+    "Short-Term Rehabilitation & Nursing": "Skilled Nursing"
+  }
+}

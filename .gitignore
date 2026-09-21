@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Ownership reconciliation runtime state
+*.db
+*.sqlite
+*.sqlite3
+data/
+logs/
+snapshots/
