@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from urllib.parse import urlencode
 
-from .errors import ValidationError
+from .errors import IndeterminateWriteError, SourceError, ValidationError
 from .http import HttpClient
-from .models import Account, OperatorProfile
+from .models import Account, Contact, OperatorProfile
 
 
 class CrmClient:
@@ -20,6 +20,23 @@ class CrmClient:
         if params:
             url += "?" + urlencode(params)
         return self.http.get(url, self.headers).json()
+
+    def _write_json(
+        self, method: str, path: str, payload: dict[str, object]
+    ) -> tuple[int, dict[str, object]]:
+        response = self.http.request(
+            method, self.profile.crm_api_base_url + path,
+            headers=self.headers, json_body=payload,
+        )
+        try:
+            parsed = response.json()
+        except SourceError as exc:
+            raise IndeterminateWriteError(
+                f"CRM {method} returned success without a usable response body"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ValidationError(f"CRM {method} response was not an object")
+        return response.status, parsed
 
     def verify_workspace(self) -> dict[str, object]:
         payload = self._get_json("/me")
@@ -65,3 +82,47 @@ class CrmClient:
         if expected and parent.account_id != expected:
             raise ValidationError(f"Parent ID changed: expected {expected}, got {parent.account_id}")
         return parent
+
+    def fetch_contacts(self, account_id: str, *, page_size: int = 100) -> list[Contact]:
+        rows: list[dict[str, object]] = []
+        page = 1
+        while True:
+            payload = self._get_json(
+                "/contacts", {"account_id": account_id, "page": page, "page_size": page_size}
+            )
+            if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                raise ValidationError("CRM contacts response has no data list")
+            batch = payload["data"]
+            rows.extend(item for item in batch if isinstance(item, dict))
+            if not batch or len(rows) >= int(payload.get("total", len(rows))):
+                break
+            page += 1
+        contacts = [Contact.from_api(row) for row in rows]
+        if any(not item.contact_id for item in contacts):
+            raise ValidationError("CRM contact snapshot contains a blank contact ID")
+        return contacts
+
+    def get_account(self, account_id: str) -> Account:
+        payload = self._get_json(f"/accounts/{account_id}")
+        if not isinstance(payload, dict):
+            raise ValidationError("CRM account response was not an object")
+        return Account.from_api(payload)
+
+    def get_contact(self, contact_id: str) -> Contact:
+        payload = self._get_json(f"/contacts/{contact_id}")
+        if not isinstance(payload, dict):
+            raise ValidationError("CRM contact response was not an object")
+        return Contact.from_api(payload)
+
+    def create_account(self, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+        return self._write_json("POST", "/accounts", payload)
+
+    def update_account(
+        self, account_id: str, payload: dict[str, object]
+    ) -> tuple[int, dict[str, object]]:
+        return self._write_json("PATCH", f"/accounts/{account_id}", payload)
+
+    def update_contact(
+        self, contact_id: str, payload: dict[str, object]
+    ) -> tuple[int, dict[str, object]]:
+        return self._write_json("PATCH", f"/contacts/{contact_id}", payload)

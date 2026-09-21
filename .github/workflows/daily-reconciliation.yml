@@ -1,0 +1,42 @@
+name: Daily reconciliation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 13 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLIPBOARD_CRM_TOKEN: ${{ secrets.CLIPBOARD_CRM_TOKEN }}
+      RECONCILIATION_DB: data/reconciliation.sqlite3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Restore reconciliation ledger
+        uses: actions/cache@v4
+        with:
+          path: data/reconciliation.sqlite3
+          key: reconciliation-${{ github.run_id }}
+          restore-keys: |
+            reconciliation-
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -v
+      - name: Generate recommendations only
+        run: python run_pipeline.py --operator bellhaven
+      - name: Preserve audit database
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reconciliation-${{ github.run_id }}
+          path: data/reconciliation.sqlite3
+          if-no-files-found: warn
+          retention-days: 14

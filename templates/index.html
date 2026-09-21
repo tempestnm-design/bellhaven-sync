@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Review Queue · Ownership Review{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">Revenue Strategy & Operations</p>
+    <h1>Reconciliation review queue</h1>
+    <p>Recommendations remain inert until reviewed. Approval and execution are separate audited actions.</p>
+  </div>
+  <div class="summary-grid">
+    <div><strong>{{ counts.Pending }}</strong><span>Pending</span></div>
+    <div><strong>{{ counts.Approved }}</strong><span>Approved</span></div>
+    <div><strong>{{ counts.Applied }}</strong><span>Applied</span></div>
+    <div><strong>{{ counts.Conflict + counts.Failed }}</strong><span>Attention</span></div>
+  </div>
+</section>
+
+<form class="filters" method="get">
+  <label>Status<select name="status"><option value="">All</option>{% for value in options.statuses %}<option {% if filters.status == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+  <label>Classification<select name="classification"><option value="">All</option>{% for value in options.classifications %}<option {% if filters.classification == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+  <label>Confidence<select name="confidence"><option value="">All</option>{% for value in options.confidences %}<option {% if filters.confidence == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+  <label>Run<select name="run_id"><option value="">All</option>{% for value in options.runs %}<option value="{{ value }}" {% if filters.run_id == value|string %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+  <label class="search">Facility<input name="facility" value="{{ filters.facility }}" placeholder="Name or location"></label>
+  <button class="button secondary" type="submit">Filter</button>
+</form>
+
+<section class="queue">
+  {% for proposal in proposals %}
+    {% set website = proposal.evidence.website or {} %}
+    {% set facility_name = website.name or (proposal.current[0].name if proposal.current else proposal.facility_key) %}
+    <a class="proposal-card" href="{{ url_for('proposal_detail', proposal_id=proposal.proposal_id) }}">
+      <div class="proposal-main">
+        <div class="badges">
+          <span class="badge status-{{ proposal.status|lower|replace(' ', '-') }}">{{ proposal.status }}</span>
+          <span class="badge neutral">{{ proposal.classification|replace('_', ' ') }}</span>
+          <span class="badge confidence-{{ proposal.confidence }}">{{ proposal.confidence }} confidence</span>
+        </div>
+        <h2>{{ facility_name }}</h2>
+        <p><strong>{{ proposal.evidence.recommendation or proposal.evidence.explanation }}</strong></p>
+        {% if proposal.evidence.recommendation %}<p class="secondary-text">Why: {{ proposal.evidence.display_explanation or proposal.evidence.explanation }}</p>{% endif %}
+      </div>
+      <div class="proposal-meta">
+        <span>Run {{ proposal.run_id }}</span>
+        <span>{{ proposal.step_count or 0 }} operation{% if proposal.step_count != 1 %}s{% endif %}</span>
+        <span>{{ proposal.applied_steps or 0 }} applied</span>
+      </div>
+    </a>
+  {% else %}
+    <div class="empty-state">No proposals match these filters.</div>
+  {% endfor %}
+</section>
+{% endblock %}

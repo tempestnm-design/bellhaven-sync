@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% set website = proposal.evidence.website or {} %}
+{% set facility_name = website.name or (proposal.current[0].name if proposal.current else proposal.facility_key) %}
+{% block title %}{{ facility_name }} · Ownership Review{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ url_for('index') }}">← Review queue</a>
+<section class="detail-header">
+  <div>
+    <div class="badges">
+      <span class="badge status-{{ proposal.status|lower|replace(' ', '-') }}">{{ proposal.status }}</span>
+      <span class="badge neutral">{{ proposal.classification|replace('_', ' ') }}</span>
+      <span class="badge confidence-{{ proposal.confidence }}">{{ proposal.confidence }} confidence</span>
+    </div>
+    <h1>{{ facility_name }}</h1>
+    <p><strong>{{ proposal.evidence.recommendation or proposal.evidence.explanation }}</strong></p>
+    {% if proposal.evidence.recommendation %}<p class="secondary-text">Why: {{ proposal.evidence.display_explanation or proposal.evidence.explanation }}</p>{% endif %}
+  </div>
+  <dl class="identity-list">
+    <div><dt>Proposal</dt><dd>#{{ proposal.proposal_id }}</dd></div>
+    <div><dt>Run</dt><dd>{{ proposal.run_id }}</dd></div>
+    <div><dt>Fingerprint</dt><dd class="mono">{{ proposal.fingerprint[:12] }}…</dd></div>
+  </dl>
+</section>
+
+<div class="detail-grid">
+  <section class="panel">
+    <h2>Website evidence</h2>
+    {% if website %}
+      <dl class="field-list">
+        <div><dt>Name</dt><dd>{{ website.name }}</dd></div>
+        <div><dt>Address</dt><dd>{{ website.street }}, {{ website.city }}, {{ website.state }} {{ website.zip_code }}</dd></div>
+        <div><dt>Care</dt><dd>{{ website.care_offerings|join(', ') }}</dd></div>
+        <div><dt>Administrator</dt><dd>{{ website.administrator or 'Not supplied' }}</dd></div>
+        <div><dt>Phone</dt><dd>{{ website.phone or 'Not supplied' }}</dd></div>
+        <div><dt>Source</dt><dd><a href="{{ website.source_url }}" target="_blank" rel="noreferrer">Open facility page</a></dd></div>
+      </dl>
+    {% else %}<p>Website-absent child identified from a complete scrape.</p>{% endif %}
+  </section>
+  <section class="panel">
+    <h2>Financial and ownership checks</h2>
+    {% for account in proposal.current %}
+      <div class="account-block">
+        <strong>{{ account.name }}</strong><span class="mono">{{ account.account_id }}</span>
+        <dl class="field-list compact">
+          <div><dt>Parent</dt><dd>{{ account.parent_name or 'Unparented' }}</dd></div>
+          <div><dt>Status</dt><dd>{{ account.status }}</dd></div>
+          <div><dt>Lifetime revenue</dt><dd>${{ '%.2f'|format(account.lifetime_revenue|float) }}</dd></div>
+          <div><dt>Outstanding AR</dt><dd>${{ '%.2f'|format(account.outstanding_ar|float) }}</dd></div>
+        </dl>
+      </div>
+    {% else %}<p>No existing CRM account was selected.</p>{% endfor %}
+  </section>
+</div>
+
+<div class="detail-grid">
+  <section class="panel">
+    <h2>Matching signals</h2>
+    {% set score_state = namespace(has_survivor=false) %}
+    {% for candidate in proposal.evidence.candidates %}{% if candidate.survivor_score is defined and candidate.survivor_score is not none %}{% set score_state.has_survivor = true %}{% endif %}{% endfor %}
+    {% if proposal.evidence.candidates %}
+      <p class="secondary-text">Match score: up to 100 points for location/name identity plus 8 for an exact phone match. A score of 80 is required for a writable match.</p>
+      {% if score_state.has_survivor %}<p class="secondary-text">Survivor score: 90 points maximum — name fit 40, ownership fit 25, website phone 20, and active status 5.</p>{% endif %}
+    {% endif %}
+    {% for candidate in proposal.evidence.candidates %}
+      <div class="candidate">
+        <div><strong>{{ candidate.account_name or candidate.account_id }}</strong><span>Match {{ '%.1f'|format(candidate.score|float) }}/{{ '%.0f'|format(candidate.match_scale|default(108)|float) }}</span></div>
+        <p>{{ candidate.parent_name or 'Unparented' }} · {{ candidate.location }} · {{ candidate.status }}</p>
+        <p class="mono">Account {{ candidate.account_id }}</p>
+        <ul>{% for signal in candidate.signals %}<li>{{ signal }}</li>{% endfor %}</ul>
+        {% if candidate.survivor_score is defined and candidate.survivor_score is not none %}
+          <p><strong>Survivor score: {{ '%.1f'|format(candidate.survivor_score|float) }}/{{ '%.0f'|format(candidate.survivor_scale|default(90)|float) }}</strong></p>
+          <ul>{% for signal in candidate.survivor_signals %}<li>{{ signal }}</li>{% endfor %}</ul>
+        {% endif %}
+        {% if candidate.contradictions %}<p class="warning-text">Contradictions: {{ candidate.contradictions|join(', ') }}</p>{% endif %}
+      </div>
+    {% else %}<p>No defensible CRM candidate was found.</p>{% endfor %}
+    {% if proposal.evidence.contacts %}
+      <h3>Contact evidence</h3>
+      {% for contact in proposal.evidence.contacts %}<p><strong>{{ contact.name }}</strong> · {{ contact.title }} · account <span class="mono">{{ contact.account_id }}</span></p>{% endfor %}
+    {% endif %}
+  </section>
+  <section class="panel">
+    <h2>Proposed final state</h2>
+    <pre>{{ proposal.desired|tojson(indent=2) }}</pre>
+  </section>
+</div>
+
+<section class="panel full-width">
+  <h2>Ordered operations</h2>
+  <ol class="steps">
+    {% for step in proposal.steps %}
+      <li>
+        <div class="step-heading"><strong>{{ step.operation }}</strong><span class="badge status-{{ step.status|lower|replace(' ', '-') }}">{{ step.status }}</span></div>
+        <div class="mono">Target: {{ step.target_id or 'assigned by CRM response' }}</div>
+        <pre>{{ step.request|tojson(indent=2) }}</pre>
+        {% if step.response %}<details><summary>Recorded response</summary><pre>{{ step.response|tojson(indent=2) }}</pre></details>{% endif %}
+      </li>
+    {% else %}<li class="empty-state">Review-only finding; no executable operations.</li>{% endfor %}
+  </ol>
+</section>
+
+{% if proposal.status == 'Pending' %}
+<section class="decision-grid">
+  {% if proposal.writable %}
+  <form class="panel decision approve" method="post" action="{{ url_for('approve', proposal_id=proposal.proposal_id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <h2>Approve recommendation</h2>
+    <label>Reviewer<input name="reviewer_name" value="{{ reviewer_name }}" required></label>
+    <label>Decision note<textarea name="reason" placeholder="Optional rationale or verification note"></textarea></label>
+    <button class="button primary" type="submit">Approve without executing</button>
+  </form>
+  {% endif %}
+  <form class="panel decision reject" method="post" action="{{ url_for('reject', proposal_id=proposal.proposal_id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <h2>Reject recommendation</h2>
+    <label>Reviewer<input name="reviewer_name" value="{{ reviewer_name }}" required></label>
+    <label>Reason<textarea name="reason" required placeholder="Required for auditability"></textarea></label>
+    <button class="button danger" type="submit">Reject proposal</button>
+  </form>
+</section>
+{% elif proposal.status in ['Approved', 'Partially Applied', 'Failed'] and proposal.writable %}
+<section class="panel execution-panel">
+  <h2>Execute approved operations</h2>
+  <p>The executor will re-fetch every pending target and stop on live-state drift. Completed compound steps are not repeated.</p>
+  <form method="post" action="{{ url_for('execute', proposal_id=proposal.proposal_id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="confirmation"><input type="checkbox" name="confirmation" value="execute-approved-proposal" required> I have reviewed the ordered operations and intend to write this approved proposal to the CRM sandbox.</label>
+    <button class="button primary" type="submit">Execute approved proposal</button>
+  </form>
+</section>
+{% endif %}
+
+<section class="panel full-width">
+  <h2>Decision and execution history</h2>
+  {% if proposal.reviewer_name %}<p><strong>{{ proposal.reviewer_name }}</strong> · {{ proposal.decided_at }}<br>{{ proposal.reviewer_reason or 'No decision note supplied.' }}</p>{% endif %}
+  <ol class="audit-list">
+    {% for event in proposal.audit_events %}
+      <li><strong>{{ event.event_type|replace('_', ' ') }}</strong><span>{{ event.created_at }}</span><pre>{{ event.detail|tojson(indent=2) }}</pre></li>
+    {% else %}<li>No decisions or execution events recorded.</li>{% endfor %}
+  </ol>
+</section>
+{% endblock %}
