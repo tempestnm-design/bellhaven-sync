@@ -61,7 +61,10 @@ CREATE TABLE IF NOT EXISTS proposals (
   current_json TEXT NOT NULL,
   desired_json TEXT NOT NULL,
   reviewer_reason TEXT,
-  decided_at TEXT
+  reviewer_name TEXT,
+  decided_at TEXT,
+  execution_started_at TEXT,
+  execution_finished_at TEXT
 );
 CREATE TABLE IF NOT EXISTS proposal_steps (
   step_id INTEGER PRIMARY KEY,
@@ -71,7 +74,20 @@ CREATE TABLE IF NOT EXISTS proposal_steps (
   target_id TEXT NOT NULL,
   request_json TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'Pending',
+  response_status INTEGER,
+  response_json TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT,
+  finished_at TEXT,
   UNIQUE(proposal_id, sequence)
+);
+CREATE TABLE IF NOT EXISTS audit_events (
+  event_id INTEGER PRIMARY KEY,
+  run_id INTEGER NOT NULL REFERENCES runs(run_id),
+  proposal_id INTEGER REFERENCES proposals(proposal_id),
+  event_type TEXT NOT NULL,
+  detail_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
 );
 """
 
@@ -92,7 +108,35 @@ class SnapshotStore:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(path)
+        self.connection.row_factory = sqlite3.Row
         self.connection.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        additions = {
+            "proposals": {
+                "reviewer_name": "TEXT",
+                "execution_started_at": "TEXT",
+                "execution_finished_at": "TEXT",
+            },
+            "proposal_steps": {
+                "response_status": "INTEGER",
+                "response_json": "TEXT",
+                "attempts": "INTEGER NOT NULL DEFAULT 0",
+                "started_at": "TEXT",
+                "finished_at": "TEXT",
+            },
+        }
+        for table, columns in additions.items():
+            existing = {
+                row["name"] for row in self.connection.execute(f"PRAGMA table_info({table})")
+            }
+            for column, definition in columns.items():
+                if column not in existing:
+                    self.connection.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                    )
+        self.connection.commit()
 
     @contextmanager
     def run(self, operator_key: str) -> Iterator[int]:
@@ -185,6 +229,161 @@ class SnapshotStore:
                 )
         self.connection.commit()
         return inserted
+
+    def list_proposals(self, filters: dict[str, str] | None = None) -> list[dict[str, object]]:
+        filters = filters or {}
+        clauses: list[str] = []
+        values: list[object] = []
+        allowed = {"status", "classification", "confidence", "run_id"}
+        for key in allowed:
+            value = filters.get(key, "").strip()
+            if value:
+                clauses.append(f"p.{key} = ?")
+                values.append(int(value) if key == "run_id" else value)
+        facility = filters.get("facility", "").strip()
+        if facility:
+            clauses.append(
+                "(p.facility_key LIKE ? OR json_extract(p.evidence_json, '$.website.name') LIKE ?)"
+            )
+            values.extend([f"%{facility}%", f"%{facility}%"])
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        rows = self.connection.execute(
+            f"""SELECT p.*, COUNT(s.step_id) AS step_count,
+                       SUM(CASE WHEN s.status='Applied' THEN 1 ELSE 0 END) AS applied_steps
+                FROM proposals p LEFT JOIN proposal_steps s ON s.proposal_id=p.proposal_id
+                {where}
+                GROUP BY p.proposal_id
+                ORDER BY CASE p.status WHEN 'Pending' THEN 0 WHEN 'Approved' THEN 1 ELSE 2 END,
+                         p.proposal_id""",
+            values,
+        ).fetchall()
+        return [self._proposal_dict(row, include_steps=False) for row in rows]
+
+    def get_proposal(self, proposal_id: int) -> dict[str, object] | None:
+        row = self.connection.execute(
+            "SELECT * FROM proposals WHERE proposal_id=?", (proposal_id,)
+        ).fetchone()
+        if not row:
+            return None
+        proposal = self._proposal_dict(row, include_steps=False)
+        steps = self.connection.execute(
+            "SELECT * FROM proposal_steps WHERE proposal_id=? ORDER BY sequence",
+            (proposal_id,),
+        ).fetchall()
+        proposal["steps"] = [self._step_dict(step) for step in steps]
+        proposal["audit_events"] = [
+            {
+                **dict(event),
+                "detail": json.loads(event["detail_json"]),
+            }
+            for event in self.connection.execute(
+                "SELECT * FROM audit_events WHERE proposal_id=? ORDER BY event_id",
+                (proposal_id,),
+            )
+        ]
+        return proposal
+
+    def _proposal_dict(self, row: sqlite3.Row, *, include_steps: bool) -> dict[str, object]:
+        result = dict(row)
+        for column in ("evidence_json", "current_json", "desired_json"):
+            result[column.removesuffix("_json")] = json.loads(result[column])
+        result["writable"] = bool(result["writable"])
+        result.pop("evidence_json", None)
+        result.pop("current_json", None)
+        result.pop("desired_json", None)
+        return result
+
+    @staticmethod
+    def _step_dict(row: sqlite3.Row) -> dict[str, object]:
+        result = dict(row)
+        result["request"] = json.loads(result.pop("request_json"))
+        response = result.pop("response_json")
+        result["response"] = json.loads(response) if response else None
+        return result
+
+    def decide_proposal(
+        self, proposal_id: int, decision: str, reviewer_name: str, reason: str
+    ) -> None:
+        if decision not in {"Approved", "Rejected"}:
+            raise ValueError("Decision must be Approved or Rejected")
+        self.connection.execute("BEGIN IMMEDIATE")
+        row = self.connection.execute(
+            "SELECT run_id, status, writable FROM proposals WHERE proposal_id=?", (proposal_id,)
+        ).fetchone()
+        if not row:
+            self.connection.rollback()
+            raise KeyError(proposal_id)
+        if row["status"] != "Pending":
+            self.connection.rollback()
+            raise ValueError("Only Pending proposals can be decided")
+        if decision == "Approved" and not row["writable"]:
+            self.connection.rollback()
+            raise ValueError("Non-writable findings cannot be approved for execution")
+        self.connection.execute(
+            """UPDATE proposals SET status=?, reviewer_name=?, reviewer_reason=?, decided_at=?
+               WHERE proposal_id=?""",
+            (decision, reviewer_name.strip() or "Local Reviewer", reason.strip(), _now(), proposal_id),
+        )
+        self._audit(row["run_id"], proposal_id, f"proposal_{decision.lower()}", {
+            "reviewer_name": reviewer_name.strip() or "Local Reviewer",
+            "reason": reason.strip(),
+        })
+        self.connection.commit()
+
+    def _audit(
+        self, run_id: int, proposal_id: int | None, event_type: str, detail: dict[str, object]
+    ) -> None:
+        self.connection.execute(
+            """INSERT INTO audit_events(run_id, proposal_id, event_type, detail_json, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (run_id, proposal_id, event_type, _canonical(detail), _now()),
+        )
+
+    def set_proposal_status(
+        self, proposal_id: int, status: str, event_type: str, detail: dict[str, object]
+    ) -> None:
+        row = self.connection.execute(
+            "SELECT run_id FROM proposals WHERE proposal_id=?", (proposal_id,)
+        ).fetchone()
+        if not row:
+            raise KeyError(proposal_id)
+        fields = ["status=?"]
+        values: list[object] = [status]
+        if status == "Applying":
+            fields.append("execution_started_at=?")
+            values.append(_now())
+        if status in {"Applied", "Partially Applied", "Conflict", "Failed"}:
+            fields.append("execution_finished_at=?")
+            values.append(_now())
+        values.append(proposal_id)
+        self.connection.execute(
+            f"UPDATE proposals SET {', '.join(fields)} WHERE proposal_id=?", values
+        )
+        self._audit(row["run_id"], proposal_id, event_type, detail)
+        self.connection.commit()
+
+    def start_step(self, step_id: int) -> None:
+        self.connection.execute(
+            """UPDATE proposal_steps SET status='Applying', attempts=attempts+1, started_at=?
+               WHERE step_id=?""",
+            (_now(), step_id),
+        )
+        self.connection.commit()
+
+    def finish_step(
+        self, step_id: int, status: str, response_status: int | None,
+        response: object, *, target_id: str | None = None,
+    ) -> None:
+        assignments = ["status=?", "response_status=?", "response_json=?", "finished_at=?"]
+        values: list[object] = [status, response_status, _canonical(response), _now()]
+        if target_id is not None:
+            assignments.append("target_id=?")
+            values.append(target_id)
+        values.append(step_id)
+        self.connection.execute(
+            f"UPDATE proposal_steps SET {', '.join(assignments)} WHERE step_id=?", values
+        )
+        self.connection.commit()
 
     def close(self) -> None:
         self.connection.close()

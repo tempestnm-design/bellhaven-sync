@@ -1,2 +1,2 @@
 # Batches 1 and 2 use only the Python standard library.
-# Flask will be added with the review application.
+Flask>=3.1,<4

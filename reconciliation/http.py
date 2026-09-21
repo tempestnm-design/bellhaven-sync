@@ -33,7 +33,18 @@ class HttpClient:
         self.retries = retries
 
     def get(self, url: str, headers: dict[str, str] | None = None) -> HttpResponse:
-        request = Request(url, headers=headers or {}, method="GET")
+        return self.request("GET", url, headers=headers)
+
+    def request(
+        self, method: str, url: str, *, headers: dict[str, str] | None = None,
+        json_body: dict[str, object] | None = None,
+    ) -> HttpResponse:
+        request_headers = dict(headers or {})
+        body = None
+        if json_body is not None:
+            body = json.dumps(json_body).encode("utf-8")
+            request_headers["Content-Type"] = "application/json"
+        request = Request(url, data=body, headers=request_headers, method=method)
         for attempt in range(self.retries + 1):
             try:
                 with urlopen(request, timeout=self.timeout) as response:
@@ -43,9 +54,12 @@ class HttpClient:
             except HTTPError as exc:
                 retryable = exc.code == 429 or exc.code >= 500
                 if not retryable or attempt == self.retries:
-                    raise SourceError(f"GET {url} failed with HTTP {exc.code}") from exc
+                    safe_body = exc.read().decode("utf-8", errors="replace")[:1000]
+                    raise SourceError(
+                        f"{method} {url} failed with HTTP {exc.code}: {safe_body}"
+                    ) from exc
             except (URLError, TimeoutError) as exc:
                 if attempt == self.retries:
-                    raise SourceError(f"GET {url} failed: {exc}") from exc
+                    raise SourceError(f"{method} {url} failed: {exc}") from exc
             time.sleep(0.4 * (2**attempt))
         raise AssertionError("retry loop exhausted")

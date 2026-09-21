@@ -21,6 +21,18 @@ class CrmClient:
             url += "?" + urlencode(params)
         return self.http.get(url, self.headers).json()
 
+    def _write_json(
+        self, method: str, path: str, payload: dict[str, object]
+    ) -> tuple[int, dict[str, object]]:
+        response = self.http.request(
+            method, self.profile.crm_api_base_url + path,
+            headers=self.headers, json_body=payload,
+        )
+        parsed = response.json()
+        if not isinstance(parsed, dict):
+            raise ValidationError(f"CRM {method} response was not an object")
+        return response.status, parsed
+
     def verify_workspace(self) -> dict[str, object]:
         payload = self._get_json("/me")
         if not isinstance(payload, dict):
@@ -84,3 +96,28 @@ class CrmClient:
         if any(not item.contact_id for item in contacts):
             raise ValidationError("CRM contact snapshot contains a blank contact ID")
         return contacts
+
+    def get_account(self, account_id: str) -> Account:
+        payload = self._get_json(f"/accounts/{account_id}")
+        if not isinstance(payload, dict):
+            raise ValidationError("CRM account response was not an object")
+        return Account.from_api(payload)
+
+    def get_contact(self, contact_id: str) -> Contact:
+        payload = self._get_json(f"/contacts/{contact_id}")
+        if not isinstance(payload, dict):
+            raise ValidationError("CRM contact response was not an object")
+        return Contact.from_api(payload)
+
+    def create_account(self, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+        return self._write_json("POST", "/accounts", payload)
+
+    def update_account(
+        self, account_id: str, payload: dict[str, object]
+    ) -> tuple[int, dict[str, object]]:
+        return self._write_json("PATCH", f"/accounts/{account_id}", payload)
+
+    def update_contact(
+        self, contact_id: str, payload: dict[str, object]
+    ) -> tuple[int, dict[str, object]]:
+        return self._write_json("PATCH", f"/contacts/{contact_id}", payload)
