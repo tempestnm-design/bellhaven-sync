@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 
 from .errors import ValidationError
 from .http import HttpClient
-from .models import Account, OperatorProfile
+from .models import Account, Contact, OperatorProfile
 
 
 class CrmClient:
@@ -65,3 +65,22 @@ class CrmClient:
         if expected and parent.account_id != expected:
             raise ValidationError(f"Parent ID changed: expected {expected}, got {parent.account_id}")
         return parent
+
+    def fetch_contacts(self, account_id: str, *, page_size: int = 100) -> list[Contact]:
+        rows: list[dict[str, object]] = []
+        page = 1
+        while True:
+            payload = self._get_json(
+                "/contacts", {"account_id": account_id, "page": page, "page_size": page_size}
+            )
+            if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                raise ValidationError("CRM contacts response has no data list")
+            batch = payload["data"]
+            rows.extend(item for item in batch if isinstance(item, dict))
+            if not batch or len(rows) >= int(payload.get("total", len(rows))):
+                break
+            page += 1
+        contacts = [Contact.from_api(row) for row in rows]
+        if any(not item.contact_id for item in contacts):
+            raise ValidationError("CRM contact snapshot contains a blank contact ID")
+        return contacts

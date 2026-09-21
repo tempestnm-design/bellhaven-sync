@@ -60,6 +60,10 @@ class WebsiteTests(unittest.TestCase):
         self.assertEqual({item.name for item in facilities}, {"Listed One", "New Findlay"})
         findlay = next(item for item in facilities if item.name == "New Findlay")
         self.assertEqual(findlay.care_offerings, ("Assisted Living", "Memory Support"))
+        self.assertEqual(findlay.street, "1800 N Blanchard St")
+        self.assertEqual(findlay.city, "Findlay")
+        self.assertEqual(findlay.state, "OH")
+        self.assertEqual(findlay.zip_code, "45840")
 
     def test_fails_closed_on_incomplete_count(self) -> None:
         profile = replace(self.profile, minimum_facilities=3, maximum_facilities=3)
