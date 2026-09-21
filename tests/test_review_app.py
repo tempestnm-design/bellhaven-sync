@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -61,6 +62,35 @@ class ReviewAppTests(unittest.TestCase):
         self.assertIn(b"Bellhaven Test", detail.data)
         self.assertIn(b"Match 100.0/108", detail.data)
         self.assertIn(b"Update", detail.data)
+
+    def test_legacy_candidate_evidence_renders_without_server_error(self) -> None:
+        store = SnapshotStore(self.path)
+        row = store.connection.execute(
+            "SELECT evidence_json FROM proposals WHERE proposal_id = ?", (self.proposal_id,)
+        ).fetchone()
+        evidence = json.loads(row[0])
+        evidence.pop("recommendation", None)
+        for candidate in evidence["candidates"]:
+            for field in (
+                "account_name", "parent_name", "location", "status", "match_scale",
+                "survivor_score", "survivor_scale", "survivor_signals",
+            ):
+                candidate.pop(field, None)
+        evidence["explanation"] = "Selected old from deterministic location evidence."
+        store.connection.execute(
+            "UPDATE proposals SET evidence_json = ? WHERE proposal_id = ?",
+            (json.dumps(evidence), self.proposal_id),
+        )
+        store.connection.commit()
+        store.close()
+
+        queue = self.client.get("/")
+        detail = self.client.get(f"/proposals/{self.proposal_id}")
+        self.assertEqual(queue.status_code, 200)
+        self.assertEqual(detail.status_code, 200)
+        self.assertIn(b"Bellhaven Test", queue.data)
+        self.assertIn(b"100.0/108", detail.data)
+        self.assertNotIn(b"Selected old from deterministic", queue.data)
 
     def test_approval_records_decision_without_execution(self) -> None:
         response = self.client.post(

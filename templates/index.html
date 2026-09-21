@@ -37,7 +37,7 @@
         </div>
         <h2>{{ facility_name }}</h2>
         <p><strong>{{ proposal.evidence.recommendation or proposal.evidence.explanation }}</strong></p>
-        {% if proposal.evidence.recommendation %}<p class="secondary-text">Why: {{ proposal.evidence.explanation }}</p>{% endif %}
+        {% if proposal.evidence.recommendation %}<p class="secondary-text">Why: {{ proposal.evidence.display_explanation or proposal.evidence.explanation }}</p>{% endif %}
       </div>
       <div class="proposal-meta">
         <span>Run {{ proposal.run_id }}</span>

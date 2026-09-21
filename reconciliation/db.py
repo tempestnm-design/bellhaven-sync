@@ -295,11 +295,70 @@ class SnapshotStore:
         result = dict(row)
         for column in ("evidence_json", "current_json", "desired_json"):
             result[column.removesuffix("_json")] = json.loads(result[column])
+        self._hydrate_legacy_evidence(result)
         result["writable"] = bool(result["writable"])
         result.pop("evidence_json", None)
         result.pop("current_json", None)
         result.pop("desired_json", None)
         return result
+
+    @staticmethod
+    def _hydrate_legacy_evidence(proposal: dict[str, object]) -> None:
+        """Add display-only fields for proposals queued by an older app version."""
+        evidence = proposal.get("evidence")
+        current = proposal.get("current")
+        desired = proposal.get("desired")
+        if not isinstance(evidence, dict) or not isinstance(current, list) or not isinstance(desired, dict):
+            return
+
+        accounts = {
+            str(account.get("account_id", "")): account
+            for account in current if isinstance(account, dict)
+        }
+        for candidate in evidence.get("candidates", []):
+            if not isinstance(candidate, dict):
+                continue
+            account = accounts.get(str(candidate.get("account_id", "")), {})
+            candidate.setdefault("account_name", account.get("name", ""))
+            candidate.setdefault("parent_name", account.get("parent_name", "") or "Unparented")
+            candidate.setdefault("location", ", ".join(filter(None, (
+                str(account.get("billing_street", "")),
+                f'{account.get("billing_city", "")}, {account.get("billing_state", "")} {account.get("billing_zip", "")} '.strip(),
+            ))))
+            candidate.setdefault("status", account.get("status", ""))
+            candidate.setdefault("match_scale", 108.0)
+            candidate.setdefault("survivor_score", None)
+            candidate.setdefault("survivor_scale", 90.0)
+            candidate.setdefault("survivor_signals", [])
+
+        if evidence.get("recommendation"):
+            return
+        classification = str(proposal.get("classification", ""))
+        account = current[0] if current and isinstance(current[0], dict) else {}
+        account_name = str(account.get("name", "this account"))
+        facility = evidence.get("website") or {}
+        facility_name = str(facility.get("name", "this facility")) if isinstance(facility, dict) else "this facility"
+        recommendations = {
+            "create_account": f'Create a new Active CRM account for “{facility_name}” under the configured parent.',
+            "correct_fields": f'Update “{account_name}” in place to match the current website record.',
+            "reparent_or_correct": f'Update “{account_name}” in place, including its configured parent where required.',
+            "chow": f'Create a new configured-parent account for “{facility_name}” and link the historical account to it as a CHOW.',
+            "inactivate_stale": f'Mark “{account_name}” Inactive because it is absent from the complete website inventory and has no outstanding AR.',
+            "needs_review": f'Place “{account_name}” in Needs Review without changing its parent because outstanding AR requires investigation.',
+            "resolve_duplicates": f'Consolidate the duplicate records for “{facility_name}” using the ranked survivor shown below.',
+            "ambiguous_match": f'Review “{facility_name}” manually; the evidence is not strong enough to authorize a CRM change.',
+            "ambiguous_duplicate_financial_risk": f'Review the duplicate records for “{facility_name}” manually because financial history makes consolidation unsafe.',
+        }
+        evidence["recommendation"] = recommendations.get(classification, "Review the proposed CRM change and supporting evidence.")
+        explanation = str(evidence.get("explanation", ""))
+        candidates = evidence.get("candidates", [])
+        if explanation.startswith("Selected ") and candidates and isinstance(candidates[0], dict):
+            candidate = candidates[0]
+            evidence["display_explanation"] = (
+                f'“{candidate.get("account_name") or account_name}” matches the website location using '
+                f'{", ".join(candidate.get("signals", []))}; match score '
+                f'{float(candidate.get("score", 0)):.1f}/108 (writable threshold 80).'
+            )
 
     @staticmethod
     def _step_dict(row: sqlite3.Row) -> dict[str, object]:
