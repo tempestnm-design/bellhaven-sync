@@ -119,11 +119,20 @@ class CandidateEvidence:
     score: float
     signals: tuple[str, ...]
     contradictions: tuple[str, ...] = ()
+    account_name: str = ""
+    parent_name: str = ""
+    location: str = ""
+    status: str = ""
+    match_scale: float = 108.0
+    survivor_score: float | None = None
+    survivor_scale: float = 90.0
+    survivor_signals: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["signals"] = list(self.signals)
         data["contradictions"] = list(self.contradictions)
+        data["survivor_signals"] = list(self.survivor_signals)
         return data
 
 

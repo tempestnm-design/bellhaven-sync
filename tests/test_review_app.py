@@ -58,6 +58,9 @@ class ReviewAppTests(unittest.TestCase):
         detail = self.client.get(f"/proposals/{self.proposal_id}")
         self.assertIn(b"Ordered operations", detail.data)
         self.assertIn(b"Approve without executing", detail.data)
+        self.assertIn(b"Bellhaven Test", detail.data)
+        self.assertIn(b"Match 100.0/108", detail.data)
+        self.assertIn(b"Update", detail.data)
 
     def test_approval_records_decision_without_execution(self) -> None:
         response = self.client.post(

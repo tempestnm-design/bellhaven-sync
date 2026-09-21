@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from reconciliation.db import SnapshotStore
@@ -51,6 +52,8 @@ class MatcherTests(unittest.TestCase):
         result = match_facilities([facility()], [distractor, target], PARENT)[0]
         self.assertEqual(result.selected_accounts[0].account_id, "target")
         self.assertEqual(result.confidence, "high")
+        self.assertIn("Old Facility Name", result.explanation)
+        self.assertIn("/108", result.explanation)
 
     def test_close_duplicate_survivors_are_nonwritable_ambiguity(self) -> None:
         first = account("a")
@@ -82,6 +85,24 @@ class ProposalTests(unittest.TestCase):
         proposals = build_proposals("test", PARENT, CARE_MAP, match_facilities([], [stale], PARENT))
         self.assertEqual(proposals[0].classification, "needs_review")
         self.assertEqual(proposals[0].desired["status"], "Needs Review")
+        self.assertIn("outstanding AR", proposals[0].evidence["explanation"])
+        self.assertIn("Needs Review", proposals[0].evidence["recommendation"])
+
+    def test_stale_without_ar_is_explicitly_inactive(self) -> None:
+        stale = account("stale", name="Old Child", billing_street="9 Old Rd", outstanding_ar=0)
+        proposal = build_proposals("test", PARENT, CARE_MAP, match_facilities([], [stale], PARENT))[0]
+        self.assertEqual(proposal.classification, "inactivate_stale")
+        self.assertIn("Inactive", proposal.evidence["recommendation"])
+
+    def test_duplicate_survivor_score_has_scale_and_breakdown(self) -> None:
+        survivor = account("survivor", parent_id="", parent_name="", phone="(231) 533-2969")
+        loser = account("loser", parent_id="former", parent_name="Former", phone="")
+        result = match_facilities([facility()], [survivor, loser], PARENT)[0]
+        self.assertEqual(result.classification, "duplicate_group")
+        self.assertIn("/90", result.explanation)
+        evidence = {item.account_id: item for item in result.candidates}
+        self.assertIsNotNone(evidence["survivor"].survivor_score)
+        self.assertTrue(any("+20/20" in item for item in evidence["survivor"].survivor_signals))
 
     def test_fingerprint_is_stable(self) -> None:
         results = match_facilities([facility()], [account("old", parent_id="former")], PARENT)
@@ -98,6 +119,22 @@ class ProposalTests(unittest.TestCase):
                 self.assertEqual(store.save_proposals(first_run, [proposal]), 1)
             with store.run("test") as second_run:
                 self.assertEqual(store.save_proposals(second_run, [proposal]), 0)
+            store.close()
+
+    def test_pending_proposal_refreshes_improved_evidence_without_duplication(self) -> None:
+        results = match_facilities([facility()], [account("old", parent_id="former")], PARENT)
+        proposal = build_proposals("test", PARENT, CARE_MAP, results)[0]
+        improved = replace(proposal, evidence={**proposal.evidence, "explanation": "Clearer rationale"})
+        with tempfile.TemporaryDirectory() as directory:
+            store = SnapshotStore(Path(directory) / "test.sqlite3")
+            with store.run("test") as first_run:
+                store.save_proposals(first_run, [proposal])
+            with store.run("test") as second_run:
+                self.assertEqual(store.save_proposals(second_run, [improved]), 0)
+            stored = store.connection.execute(
+                "SELECT evidence_json FROM proposals WHERE fingerprint = ?", (proposal.fingerprint,)
+            ).fetchone()[0]
+            self.assertIn("Clearer rationale", stored)
             store.close()
 
     def test_duplicate_contact_moves_before_loser_inactivation(self) -> None:

@@ -217,6 +217,14 @@ class SnapshotStore:
                 ),
             )
             if not cursor.rowcount:
+                # Evidence and reviewer-facing wording may improve without changing the
+                # logical mutation fingerprint. Refresh only undecided queue items;
+                # decided proposals retain the evidence shown at decision time.
+                self.connection.execute(
+                    """UPDATE proposals SET confidence = ?, evidence_json = ?
+                       WHERE fingerprint = ? AND status = 'Pending'""",
+                    (proposal.confidence, _canonical(proposal.evidence), proposal.fingerprint),
+                )
                 continue
             inserted += 1
             proposal_id = int(cursor.lastrowid)

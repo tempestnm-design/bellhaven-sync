@@ -101,6 +101,7 @@ def build_proposals(
         if result.classification == "ambiguous_match":
             facility = result.facility
             key = normalize.facility_key(facility.street, facility.city, facility.state, facility.zip_code) if facility else "unknown"
+            evidence["recommendation"] = "Review manually — the evidence is not strong enough to authorize a CRM change."
             proposals.append(_proposal(
                 operator_key, key, "ambiguous_match", result.confidence, evidence,
                 [_account_view(item) for item in result.selected_accounts], {}, (), False,
@@ -111,6 +112,7 @@ def build_proposals(
             facility = result.facility
             assert facility is not None
             desired = _desired_account(facility, parent_id, care_map, include_phone=True)
+            evidence["recommendation"] = f'Create a new Active CRM account for “{facility.name}” under the configured parent.'
             key = normalize.facility_key(facility.street, facility.city, facility.state, facility.zip_code)
             steps = (ProposalStep(1, "POST account", "", desired),)
             proposals.append(_proposal(operator_key, key, "create_account", result.confidence, evidence, [], desired, steps))
@@ -129,6 +131,11 @@ def build_proposals(
             }
             changes = _changes(account, desired)
             if changes:
+                evidence["recommendation"] = (
+                    f'Place “{account.name}” in Needs Review without changing its parent; outstanding AR requires investigation.'
+                    if risky else
+                    f'Mark “{account.name}” Inactive because it is absent from the complete website inventory and has no outstanding AR.'
+                )
                 steps = (ProposalStep(1, "PATCH account", account.account_id, changes),)
                 proposals.append(_proposal(
                     operator_key, f"stale|{account.account_id}",
@@ -146,6 +153,7 @@ def build_proposals(
         if result.classification == "duplicate_group":
             survivor, *losers = result.selected_accounts
             if duplicate_has_financial_risk(losers):
+                evidence["recommendation"] = "Review manually — a proposed duplicate loser has financial history that makes automated consolidation unsafe."
                 proposals.append(_proposal(
                     operator_key, key, "ambiguous_duplicate_financial_risk", "low", evidence,
                     [_account_view(item) for item in result.selected_accounts], desired, (), False,
@@ -167,6 +175,11 @@ def build_proposals(
                     {"duplicate_of_account": survivor.account_id, "status": "Inactive"},
                 ))
             steps = tuple(steps_list)
+            loser_names = ", ".join(f'“{item.name}”' for item in losers)
+            evidence["recommendation"] = (
+                f'Keep “{survivor.name}” (account {survivor.account_id}) as the survivor; move active contacts '
+                f'and mark {loser_names} as inactive duplicate record(s).'
+            )
             proposals.append(_proposal(
                 operator_key, key, "resolve_duplicates", result.confidence, evidence,
                 [_account_view(item) for item in result.selected_accounts], desired, steps,
@@ -185,9 +198,15 @@ def build_proposals(
                 ProposalStep(2, "PATCH account", account.account_id, {"chow_current_account": "$step_1.account_id"}),
             )
             classification = "chow"
+            evidence["recommendation"] = (
+                f'Create a new account for “{facility.name}” under the configured parent and link the old account to it as a CHOW. '
+                "Do not re-parent the historical account because it has both revenue history and outstanding AR."
+            )
         else:
             steps = (ProposalStep(1, "PATCH account", account.account_id, changes),)
             classification = "reparent_or_correct" if parent_action == "direct" else "correct_fields"
+            fields = ", ".join(key.replace("billing_", "").replace("_", " ") for key in changes)
+            evidence["recommendation"] = f'Update “{account.name}” in place: {fields}.'
         proposals.append(_proposal(
             operator_key, key, classification, result.confidence, evidence,
             [_account_view(account)], desired, steps,

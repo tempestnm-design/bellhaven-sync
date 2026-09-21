@@ -12,7 +12,8 @@
       <span class="badge confidence-{{ proposal.confidence }}">{{ proposal.confidence }} confidence</span>
     </div>
     <h1>{{ facility_name }}</h1>
-    <p>{{ proposal.evidence.explanation }}</p>
+    <p><strong>{{ proposal.evidence.recommendation or proposal.evidence.explanation }}</strong></p>
+    {% if proposal.evidence.recommendation %}<p class="secondary-text">Why: {{ proposal.evidence.explanation }}</p>{% endif %}
   </div>
   <dl class="identity-list">
     <div><dt>Proposal</dt><dd>#{{ proposal.proposal_id }}</dd></div>
@@ -54,10 +55,22 @@
 <div class="detail-grid">
   <section class="panel">
     <h2>Matching signals</h2>
+    {% set score_state = namespace(has_survivor=false) %}
+    {% for candidate in proposal.evidence.candidates %}{% if candidate.survivor_score is not none %}{% set score_state.has_survivor = true %}{% endif %}{% endfor %}
+    {% if proposal.evidence.candidates %}
+      <p class="secondary-text">Match score: up to 100 points for location/name identity plus 8 for an exact phone match. A score of 80 is required for a writable match.</p>
+      {% if score_state.has_survivor %}<p class="secondary-text">Survivor score: 90 points maximum — name fit 40, ownership fit 25, website phone 20, and active status 5.</p>{% endif %}
+    {% endif %}
     {% for candidate in proposal.evidence.candidates %}
       <div class="candidate">
-        <div><strong>{{ candidate.account_id }}</strong><span>{{ '%.1f'|format(candidate.score|float) }} points</span></div>
+        <div><strong>{{ candidate.account_name or candidate.account_id }}</strong><span>Match {{ '%.1f'|format(candidate.score|float) }}/{{ '%.0f'|format(candidate.match_scale|default(108)|float) }}</span></div>
+        <p>{{ candidate.parent_name or 'Unparented' }} · {{ candidate.location }} · {{ candidate.status }}</p>
+        <p class="mono">Account {{ candidate.account_id }}</p>
         <ul>{% for signal in candidate.signals %}<li>{{ signal }}</li>{% endfor %}</ul>
+        {% if candidate.survivor_score is not none %}
+          <p><strong>Survivor score: {{ '%.1f'|format(candidate.survivor_score|float) }}/{{ '%.0f'|format(candidate.survivor_scale|default(90)|float) }}</strong></p>
+          <ul>{% for signal in candidate.survivor_signals %}<li>{{ signal }}</li>{% endfor %}</ul>
+        {% endif %}
         {% if candidate.contradictions %}<p class="warning-text">Contradictions: {{ candidate.contradictions|join(', ') }}</p>{% endif %}
       </div>
     {% else %}<p>No defensible CRM candidate was found.</p>{% endfor %}
