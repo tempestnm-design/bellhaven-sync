@@ -31,6 +31,8 @@ class _PageParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._tag_stack.append(tag)
+        if tag == "br" and self._capture:
+            self._buffer.append("|")
         if tag == "a":
             self._href = dict(attrs).get("href")
             if self._href:
@@ -66,7 +68,7 @@ class _PageParser(HTMLParser):
 class BellhavenSource(FacilitySource):
     FACILITY_PATH = re.compile(r"^/communities/[^/?#]+$")
     ADDRESS_RE = re.compile(
-        r"^(?P<street>.+?)\s+(?P<city>[A-Za-z .'-]+),\s*"
+        r"^(?P<street>.+?)\s*\|\s*(?P<city>[A-Za-z .'-]+),\s*"
         r"(?P<state>[A-Z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)$"
     )
 
