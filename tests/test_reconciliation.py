@@ -77,6 +77,11 @@ class ProposalTests(unittest.TestCase):
         self.assertEqual(proposal.classification, "reparent_or_correct")
         self.assertEqual(proposal.steps[0].operation, "PATCH account")
 
+    def test_parent_change_with_ar_but_no_revenue_is_direct(self) -> None:
+        old = account("old", parent_id="former", lifetime_revenue=0, outstanding_ar=2)
+        proposal = build_proposals("test", PARENT, CARE_MAP, match_facilities([facility()], [old], PARENT))[0]
+        self.assertEqual(proposal.classification, "reparent_or_correct")
+
     def test_stale_open_ar_routes_to_needs_review(self) -> None:
         stale = account(
             "stale", name="Old Child", billing_street="9 Old Rd", billing_city="Alliance",
@@ -89,10 +94,15 @@ class ProposalTests(unittest.TestCase):
         self.assertIn("Needs Review", proposals[0].evidence["recommendation"])
 
     def test_stale_without_ar_is_explicitly_inactive(self) -> None:
-        stale = account("stale", name="Old Child", billing_street="9 Old Rd", outstanding_ar=0)
+        stale = account(
+            "stale", name="Old Child", billing_street="9 Old Rd", outstanding_ar=0,
+            note="Retain this historical context.",
+        )
         proposal = build_proposals("test", PARENT, CARE_MAP, match_facilities([], [stale], PARENT))[0]
         self.assertEqual(proposal.classification, "inactivate_stale")
         self.assertIn("Inactive", proposal.evidence["recommendation"])
+        self.assertTrue(proposal.desired["note"].startswith("Retain this historical context."))
+        self.assertIn("inactivated during ownership reconciliation", proposal.desired["note"])
 
     def test_duplicate_survivor_score_has_scale_and_breakdown(self) -> None:
         survivor = account("survivor", parent_id="", parent_name="", phone="(231) 533-2969")

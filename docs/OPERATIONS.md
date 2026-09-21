@@ -58,6 +58,11 @@ If the process ends while a step is `Applying`, automatic retry is blocked as a
 conflict because the remote result is indeterminate. Inspect the CRM and create
 a fresh reconciliation proposal rather than risking a duplicate write.
 
+CRM writes are never retried automatically. A timeout, lost response, malformed
+success response, or account-creation response without an ID is treated as an
+indeterminate write: the proposal becomes `Conflict` and the step remains
+`Applying`. Read-only requests retain bounded retries.
+
 ## Conflict recovery
 
 1. Inspect the audit event and changed fields.

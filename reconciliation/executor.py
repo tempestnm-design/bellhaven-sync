@@ -7,6 +7,7 @@ from typing import Any
 from . import normalize
 from .crm import CrmClient
 from .db import SnapshotStore
+from .errors import IndeterminateWriteError
 
 
 ACCOUNT_FIELDS = (
@@ -133,7 +134,9 @@ class ProposalExecutor:
                     response_status, response = self.crm.create_account(request)
                     created_id = str(response.get("account_id", ""))
                     if not created_id:
-                        raise ValueError("Account creation response omitted account_id")
+                        raise IndeterminateWriteError(
+                            "Account creation returned success without account_id"
+                        )
                     step["target_id"] = created_id
                     step["status"] = "Applied"
                     self.store.finish_step(
@@ -159,6 +162,17 @@ class ProposalExecutor:
                 else:
                     raise ValueError(f"Unsupported operation: {step['operation']}")
                 applied_now = True
+            except IndeterminateWriteError as exc:
+                # start_step intentionally left this step as Applying. Retrying
+                # could repeat a write that actually committed remotely.
+                self.store.set_proposal_status(
+                    proposal_id, "Conflict", "indeterminate_write",
+                    {
+                        "sequence": step["sequence"], "operation": step["operation"],
+                        "error_type": type(exc).__name__, "message": str(exc)[:1000],
+                    },
+                )
+                return "Conflict"
             except Exception as exc:
                 self.store.finish_step(
                     int(step["step_id"]), "Failed", None,

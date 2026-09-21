@@ -29,5 +29,9 @@ class SourceError(ReconciliationError):
     """A website or API could not be read reliably."""
 
 
+class IndeterminateWriteError(SourceError):
+    """A CRM write may have landed, but its result could not be proven."""
+
+
 class ValidationError(DataValidationError):
     """A completeness or structural invariant failed."""

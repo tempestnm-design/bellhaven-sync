@@ -122,11 +122,15 @@ def build_proposals(
             account = result.selected_accounts[0]
             status = stale_status(account)
             risky = status == "Needs Review"
+            reconciliation_note = (
+                "Absent from the configured operator's complete current website inventory; "
+                + ("ownership/billing review required because outstanding AR remains." if risky else "inactivated during ownership reconciliation.")
+            )
+            existing_note = account.note.strip()
             desired = {
                 "status": status,
-                "note": (
-                    "Absent from the configured operator's complete current website inventory; "
-                    + ("ownership/billing review required because outstanding AR remains." if risky else "inactivated during ownership reconciliation.")
+                "note": existing_note if reconciliation_note in existing_note else "\n".join(
+                    item for item in (existing_note, reconciliation_note) if item
                 ),
             }
             changes = _changes(account, desired)

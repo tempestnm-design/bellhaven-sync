@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from reconciliation.db import SnapshotStore
+from reconciliation.errors import IndeterminateWriteError
 from reconciliation.executor import ProposalExecutor
 from reconciliation.matcher import match_facilities
 from reconciliation.models import Account, Contact, Facility
@@ -36,10 +37,14 @@ def account(*, revenue: float = 0, ar: float = 0) -> Account:
 
 
 class FakeCrm:
-    def __init__(self, source: Account, *, fail_update_once: bool = False) -> None:
+    def __init__(
+        self, source: Account, *, fail_update_once: bool = False,
+        indeterminate_create: bool = False,
+    ) -> None:
         self.accounts = {source.account_id: dict(source.raw)}
         self.contacts: dict[str, dict[str, object]] = {}
         self.fail_update_once = fail_update_once
+        self.indeterminate_create = indeterminate_create
         self.create_calls = 0
         self.update_calls = 0
 
@@ -56,6 +61,8 @@ class FakeCrm:
         self.create_calls += 1
         created = {**payload, "account_id": f"new-{self.create_calls}", "parent_name": "Bellhaven"}
         self.accounts[created["account_id"]] = created
+        if self.indeterminate_create:
+            raise IndeterminateWriteError("simulated lost creation response")
         return 201, dict(created)
 
     def update_account(self, account_id: str, payload: dict[str, object]):
@@ -119,6 +126,7 @@ class ExecutorTests(unittest.TestCase):
 
     def test_partial_chow_resumes_without_second_create(self) -> None:
         source = account(revenue=100, ar=25)
+        old_before = dict(source.raw)
         proposal_id = self.seed(source)
         self.approve(proposal_id)
         crm = FakeCrm(source, fail_update_once=True)
@@ -130,6 +138,25 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(executor.execute(proposal_id), "Applied")
         self.assertEqual(crm.create_calls, 1)
         self.assertEqual(crm.accounts["old"]["chow_current_account"], "new-1")
+        self.assertEqual(crm.accounts["new-1"]["parent_id"], PARENT)
+        old_after = dict(crm.accounts["old"])
+        old_after.pop("chow_current_account")
+        old_before.pop("chow_current_account")
+        self.assertEqual(old_after, old_before)
+
+    def test_indeterminate_chow_create_is_frozen_without_retry(self) -> None:
+        source = account(revenue=100, ar=25)
+        proposal_id = self.seed(source)
+        self.approve(proposal_id)
+        crm = FakeCrm(source, indeterminate_create=True)
+        executor = ProposalExecutor(self.store, crm)
+        self.assertEqual(executor.execute(proposal_id), "Conflict")
+        saved = self.store.get_proposal(proposal_id)
+        self.assertEqual(saved["steps"][0]["status"], "Applying")
+        self.assertEqual(crm.create_calls, 1)
+        with self.assertRaises(ValueError):
+            executor.execute(proposal_id)
+        self.assertEqual(crm.create_calls, 1)
 
 
 if __name__ == "__main__":

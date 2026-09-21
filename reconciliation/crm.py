@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from urllib.parse import urlencode
 
-from .errors import ValidationError
+from .errors import IndeterminateWriteError, SourceError, ValidationError
 from .http import HttpClient
 from .models import Account, Contact, OperatorProfile
 
@@ -28,7 +28,12 @@ class CrmClient:
             method, self.profile.crm_api_base_url + path,
             headers=self.headers, json_body=payload,
         )
-        parsed = response.json()
+        try:
+            parsed = response.json()
+        except SourceError as exc:
+            raise IndeterminateWriteError(
+                f"CRM {method} returned success without a usable response body"
+            ) from exc
         if not isinstance(parsed, dict):
             raise ValidationError(f"CRM {method} response was not an object")
         return response.status, parsed

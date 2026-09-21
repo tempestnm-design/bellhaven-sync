@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .errors import SourceError
+from .errors import IndeterminateWriteError, SourceError
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,10 @@ class HttpClient:
             body = json.dumps(json_body).encode("utf-8")
             request_headers["Content-Type"] = "application/json"
         request = Request(url, data=body, headers=request_headers, method=method)
-        for attempt in range(self.retries + 1):
+        # Reads can be retried safely. A timed-out POST/PATCH may already have
+        # committed remotely, so write requests are attempted exactly once.
+        max_attempts = self.retries + 1 if method.upper() == "GET" else 1
+        for attempt in range(max_attempts):
             try:
                 with urlopen(request, timeout=self.timeout) as response:
                     return HttpResponse(
@@ -53,13 +56,17 @@ class HttpClient:
                     )
             except HTTPError as exc:
                 retryable = exc.code == 429 or exc.code >= 500
-                if not retryable or attempt == self.retries:
+                if method.upper() != "GET" or not retryable or attempt == max_attempts - 1:
                     safe_body = exc.read().decode("utf-8", errors="replace")[:1000]
                     raise SourceError(
                         f"{method} {url} failed with HTTP {exc.code}: {safe_body}"
                     ) from exc
             except (URLError, TimeoutError) as exc:
-                if attempt == self.retries:
+                if method.upper() != "GET":
+                    raise IndeterminateWriteError(
+                        f"{method} {url} ended without a definitive response"
+                    ) from exc
+                if attempt == max_attempts - 1:
                     raise SourceError(f"{method} {url} failed: {exc}") from exc
             time.sleep(0.4 * (2**attempt))
-        raise AssertionError("retry loop exhausted")
+        raise AssertionError("request loop exhausted")
