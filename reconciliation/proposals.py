@@ -174,11 +174,20 @@ def build_proposals(
                             len(steps_list) + 1, "PATCH contact", contact.contact_id,
                             {"account_id": survivor.account_id},
                         ))
-                steps_list.append(ProposalStep(
-                    len(steps_list) + 1, "PATCH account", loser.account_id,
+                loser_changes = _changes(
+                    loser,
                     {"duplicate_of_account": survivor.account_id, "status": "Inactive"},
-                ))
+                )
+                if loser_changes:
+                    steps_list.append(ProposalStep(
+                        len(steps_list) + 1, "PATCH account", loser.account_id,
+                        loser_changes,
+                    ))
             steps = tuple(steps_list)
+            if not steps:
+                # The duplicate remains useful matching evidence, but its CRM
+                # survivor/loser state and contact ownership are already final.
+                continue
             loser_names = ", ".join(f'“{item.name}”' for item in losers)
             evidence["recommendation"] = (
                 f'Keep “{survivor.name}” (account {survivor.account_id}) as the survivor; move active contacts '
