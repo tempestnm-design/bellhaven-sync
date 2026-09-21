@@ -161,6 +161,16 @@ class ProposalTests(unittest.TestCase):
         operations = [(step.operation, step.target_id) for step in proposal.steps]
         self.assertEqual(operations, [("PATCH contact", "contact"), ("PATCH account", "loser")])
 
+    def test_resolved_duplicate_is_evidence_not_a_new_proposal(self) -> None:
+        survivor = account("survivor", phone="(231) 533-2969")
+        loser = account(
+            "loser", phone="(999) 999-9999", status="Inactive",
+            duplicate_of_account="survivor",
+        )
+        results = match_facilities([facility()], [survivor, loser], PARENT)
+        self.assertEqual(results[0].classification, "duplicate_group")
+        self.assertEqual(build_proposals("test", PARENT, CARE_MAP, results), [])
+
 
 if __name__ == "__main__":
     unittest.main()
